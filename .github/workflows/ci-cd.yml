@@ -40,6 +40,6 @@ jobs:
           script: |
             set -e
             cd /opt/tdillenbot
-            git pull origin main
-            ./venv/bin/pip install --quiet -r requirements.txt
-            sudo systemctl restart tdillenbot
+            sudo -u tdillenbot git pull origin main
+            sudo -u tdillenbot ./venv/bin/pip install --quiet --no-cache-dir -r requirements.txt
+            systemctl restart tdillenbot
