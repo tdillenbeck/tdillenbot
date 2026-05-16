@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 
 from telegram import ChatPermissions, Update
 from telegram.constants import ChatType
@@ -183,6 +184,58 @@ async def filter_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.error("Failed to delete message in %s: %s", chat.id, e)
 
 
+# (chat_id, user_id) -> True once they've sent a valid number+emoji message,
+# cleared when they send the matching voice memo. In-memory only; resets on bot restart.
+_pending_checkin: dict[tuple[int, int], bool] = {}
+
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001f300-\U0001f5ff"
+    "\U0001f600-\U0001f64f"
+    "\U0001f680-\U0001f6ff"
+    "\U0001f700-\U0001f77f"
+    "\U0001f900-\U0001f9ff"
+    "\U0001fa70-\U0001faff"
+    "☀-➿"
+    "]"
+)
+NUMBER_PATTERN = re.compile(r"\d")
+
+
+def is_checkin_text(text: str | None) -> bool:
+    if not text:
+        return False
+    return bool(NUMBER_PATTERN.search(text)) and bool(EMOJI_PATTERN.search(text))
+
+
+async def track_checkin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mark a user as checked-in when they send a text with a number and emoji."""
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat or not user:
+        return
+    if not is_checkin_text(message.text or message.caption):
+        return
+    _pending_checkin[(chat.id, user.id)] = True
+
+
+async def check_voice_memo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remind the sender if they posted a voice memo without a prior number+emoji."""
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat or not user:
+        return
+
+    if _pending_checkin.pop((chat.id, user.id), False):
+        return
+
+    await message.reply_text(
+        "Hey, don't forget to send a number and an emoji before your voice memo!"
+    )
+
+
 def main() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = ApplicationBuilder().token(token).build()
@@ -195,6 +248,17 @@ def main() -> None:
     )
     app.add_handler(
         MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, filter_messages)
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND,
+            track_checkin,
+        ),
+        group=1,
+    )
+    app.add_handler(
+        MessageHandler(filters.ChatType.GROUPS & filters.VOICE, check_voice_memo),
+        group=1,
     )
 
     logger.info("Bot started, polling...")
