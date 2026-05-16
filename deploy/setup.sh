@@ -48,7 +48,7 @@ else
 fi
 
 info "Installing Python dependencies..."
-sudo -u "$SERVICE_USER" "$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+sudo -u "$SERVICE_USER" "$APP_DIR/venv/bin/pip" install --quiet --no-cache-dir -r "$APP_DIR/requirements.txt"
 
 # Create .env file
 if [[ -f "$APP_DIR/.env" ]]; then
@@ -69,7 +69,7 @@ EOF
 fi
 
 # Sudoers entry for the deploy SSH user
-DEPLOY_USER="${SUDO_USER:-$USER}"
+DEPLOY_USER="${SUDO_USER:-${USER:-root}}"
 SUDOERS_FILE="/etc/sudoers.d/tdillenbot-deploy"
 if [[ -f "$SUDOERS_FILE" ]]; then
     info "Sudoers entry already exists, skipping"
