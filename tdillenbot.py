@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 
-from telegram import ChatPermissions, Update
+from telegram import (
+    ChatPermissions,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ChatType
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     ChatMemberHandler,
     CommandHandler,
     ContextTypes,
@@ -25,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 WELCOME_MESSAGE = (
     "Hi! I'm tdillenbot.\n\n"
-    "Promote me to admin and run /setup to configure group permissions.\n"
-    "Use /setlink <youtube-url> to update the Rebrandly link."
+    "Run /welcome to start the introduction.\n"
+    "Promote me to admin and run /setup to configure group permissions."
 )
 
 GROUP_DESCRIPTION = "Managed by tdillenbot. Use /setlink to update the Rebrandly link."
@@ -236,6 +244,127 @@ async def check_voice_memo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+AUDIO_DIR = Path("audio")
+STATE_DIR = Path("state")
+WELCOME_STATE_FILE = STATE_DIR / "welcome.json"
+
+
+def discover_welcome_steps() -> list[Path]:
+    if not AUDIO_DIR.exists():
+        return []
+    return sorted(AUDIO_DIR.glob("*.mp3"))
+
+
+def load_welcome_state() -> dict[str, int]:
+    if not WELCOME_STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(WELCOME_STATE_FILE.read_text())
+    except Exception as e:
+        logger.error("Failed to read welcome state: %s", e)
+        return {}
+
+
+def save_welcome_state(state: dict[str, int]) -> None:
+    STATE_DIR.mkdir(exist_ok=True)
+    WELCOME_STATE_FILE.write_text(json.dumps(state))
+
+
+def welcome_key(chat_id: int, user_id: int) -> str:
+    return f"{chat_id}:{user_id}"
+
+
+async def send_welcome_step(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, step_index: int
+) -> None:
+    steps = discover_welcome_steps()
+
+    if step_index >= len(steps):
+        state = load_welcome_state()
+        state.pop(welcome_key(chat_id, user_id), None)
+        save_welcome_state(state)
+        await context.bot.send_message(
+            chat_id=chat_id, text="That's the end of the welcome — thanks for sticking with it!"
+        )
+        return
+
+    audio_path = steps[step_index]
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Next ▶", callback_data=f"welcome:next:{user_id}")]]
+    )
+
+    try:
+        with audio_path.open("rb") as f:
+            await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=f,
+                title=audio_path.stem.replace("_", " ").title(),
+                reply_markup=keyboard,
+            )
+    except FileNotFoundError:
+        logger.error("Welcome audio missing: %s", audio_path)
+        await context.bot.send_message(
+            chat_id=chat_id, text="Sorry, the next welcome audio is missing. Try /welcome again later."
+        )
+
+
+async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await update.message.reply_text("Run /welcome from inside a group.")
+        return
+
+    steps = discover_welcome_steps()
+    if not steps:
+        await update.message.reply_text("No welcome audio is configured yet.")
+        return
+
+    state = load_welcome_state()
+    state[welcome_key(chat.id, user.id)] = 0
+    save_welcome_state(state)
+
+    await send_welcome_step(context, chat.id, user.id, 0)
+
+
+async def welcome_next(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    parts = (query.data or "").split(":")
+    if len(parts) != 3 or parts[0] != "welcome" or parts[1] != "next":
+        await query.answer()
+        return
+
+    try:
+        intended_user_id = int(parts[2])
+    except ValueError:
+        await query.answer()
+        return
+
+    if query.from_user.id != intended_user_id:
+        await query.answer("This isn't your welcome flow.", show_alert=True)
+        return
+
+    state = load_welcome_state()
+    key = welcome_key(query.message.chat.id, query.from_user.id)
+    current = state.get(key)
+    if current is None:
+        await query.answer("No active welcome — run /welcome to start.", show_alert=True)
+        return
+
+    await query.answer()
+
+    next_index = current + 1
+    state[key] = next_index
+    save_welcome_state(state)
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.warning("Could not remove Next button on prior message: %s", e)
+
+    await send_welcome_step(context, query.message.chat.id, query.from_user.id, next_index)
+
+
 def main() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = ApplicationBuilder().token(token).build()
@@ -243,6 +372,8 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setlink", setlink))
     app.add_handler(CommandHandler("setup", setup_group))
+    app.add_handler(CommandHandler("welcome", welcome))
+    app.add_handler(CallbackQueryHandler(welcome_next, pattern=r"^welcome:next:"))
     app.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
