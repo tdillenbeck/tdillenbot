@@ -278,6 +278,14 @@ async def send_welcome_step(
     context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, step_index: int
 ) -> None:
     steps = discover_welcome_steps()
+    logger.info(
+        "Sending welcome step %d to user %d in chat %d (found %d audio files: %s)",
+        step_index,
+        user_id,
+        chat_id,
+        len(steps),
+        [str(p) for p in steps],
+    )
 
     if step_index >= len(steps):
         state = load_welcome_state()
@@ -298,26 +306,40 @@ async def send_welcome_step(
             await context.bot.send_audio(
                 chat_id=chat_id,
                 audio=f,
-                title=audio_path.stem.replace("_", " ").title(),
+                filename=audio_path.name,
+                title=audio_path.stem,
                 reply_markup=keyboard,
             )
-    except FileNotFoundError:
-        logger.error("Welcome audio missing: %s", audio_path)
-        await context.bot.send_message(
-            chat_id=chat_id, text="Sorry, the next welcome audio is missing. Try /welcome again later."
-        )
+        logger.info("Sent welcome audio %s to chat %d", audio_path.name, chat_id)
+    except Exception as e:
+        logger.exception("Failed to send welcome audio %s to chat %d", audio_path, chat_id)
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"Couldn't send the next welcome audio: {e}",
+            )
+        except Exception:
+            pass
 
 
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     user = update.effective_user
+    logger.info(
+        "/welcome invoked by user %d in chat %d (cwd=%s)",
+        user.id,
+        chat.id,
+        os.getcwd(),
+    )
     if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await update.message.reply_text("Run /welcome from inside a group.")
         return
 
     steps = discover_welcome_steps()
     if not steps:
-        await update.message.reply_text("No welcome audio is configured yet.")
+        await update.message.reply_text(
+            f"No welcome audio is configured yet. Looked in {AUDIO_DIR.resolve()}."
+        )
         return
 
     state = load_welcome_state()
