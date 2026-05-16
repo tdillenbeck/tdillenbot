@@ -13,21 +13,27 @@ Accepts full URLs (`https://www.youtube.com/watch?v=...`), short URLs (`https://
 
 ## CI/CD
 
-Pushes to `main` run tests then deploy automatically via SSH. Pull requests run tests only.
+Pushes to `main` run tests then deploy automatically via SSH over Tailscale. Pull requests run tests only.
 
 **Required GitHub Secrets** (Settings → Secrets and variables → Actions):
 
 | Secret | Value |
 |---|---|
-| `SSH_HOST` | VM hostname or IP |
-| `SSH_USER` | SSH login username |
-| `SSH_PRIVATE_KEY` | Private key with access to the VM |
+| `TAILSCALE_AUTHKEY` | Ephemeral auth key from [Tailscale admin](https://login.tailscale.com/admin/settings/keys) |
+| `SSH_HOST` | CT's Tailscale IP (`100.x.x.x`) or MagicDNS hostname |
+| `SSH_USER` | SSH login username on the CT |
+| `SSH_PRIVATE_KEY` | Private key whose public half is in the CT's `~/.ssh/authorized_keys` |
 
-## VM Setup
+For the Tailscale auth key: go to **Settings → Keys → Generate auth key**, enable **Reusable** and **Ephemeral** (ephemeral keys auto-remove the runner node when the job finishes).
 
-Run once on the VM before the first deploy.
+## Proxmox CT Setup
+
+Run once inside the CT before the first deploy.
 
 ```bash
+# Install dependencies
+sudo apt update && sudo apt install -y python3 python3-venv git openssh-server
+
 # Create a service account and app directory
 sudo useradd -r -s /bin/false tdillenbot
 sudo mkdir -p /opt/tdillenbot
@@ -59,6 +65,8 @@ sudo systemctl enable --now tdillenbot
 ```
 
 Check status with `sudo systemctl status tdillenbot` and logs with `journalctl -u tdillenbot -f`.
+
+> **Note:** Proxmox LXC containers require `features: nesting=1` in the CT options for systemd to work correctly. Enable it in the Proxmox web UI under the CT's **Options → Features** before running setup.
 
 ## Development
 
