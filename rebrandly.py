@@ -4,17 +4,15 @@ import requests
 import argparse
 import os
 
-API_KEY = os.environ['REBRANDLY_API_KEY']
-LINK_ID = os.environ['REBRANDLY_LINK_ID']
-
-
 def point_rebrandly(new_id):
-    base_url = "https://www.youtube.com/watch?v="
+    api_key = os.environ['REBRANDLY_API_KEY']
+    link_id = os.environ['REBRANDLY_LINK_ID']
+
     id = extract_video_id(new_id)
     new_destination = f'https://www.youtube.com/watch?v={id}'
 
-    rebrandly_url = f'https://api.rebrandly.com/v1/links/{LINK_ID}'
-    rebrandly_headers = {'apikey': API_KEY, 'Content-Type': 'application/json'}
+    rebrandly_url = f'https://api.rebrandly.com/v1/links/{link_id}'
+    rebrandly_headers = {'apikey': api_key, 'Content-Type': 'application/json'}
     rebrandly_json = {"destination": new_destination}
 
     action = requests.post(rebrandly_url, json=rebrandly_json, headers=rebrandly_headers)
