@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 WELCOME_MESSAGE = (
     "Hi! I'm tdillenbot.\n\n"
-    "I've configured this group with restricted permissions:\n"
-    "- Members can't invite others, pin messages, or change group info\n"
-    "- Links and forwarded messages from non-admins will be removed\n\n"
+    "Promote me to admin and run /setup to configure group permissions.\n"
     "Use /setlink <youtube-url> to update the Rebrandly link."
 )
 
@@ -72,7 +70,7 @@ async def setlink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fires when the bot's own membership status changes."""
+    """Send a welcome message when the bot is added to a group."""
     member_update = update.my_chat_member
     chat = member_update.chat
     old_status = member_update.old_chat_member.status
@@ -87,44 +85,63 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     logger.info("Bot added to chat %s (%s) as %s", chat.id, chat.title, new_status)
-    await configure_group(context, chat.id, new_status)
-
-
-async def configure_group(
-    context: ContextTypes.DEFAULT_TYPE, chat_id: int, status: str
-) -> None:
     try:
-        await context.bot.send_message(chat_id=chat_id, text=WELCOME_MESSAGE)
+        await context.bot.send_message(chat_id=chat.id, text=WELCOME_MESSAGE)
     except Exception as e:
-        logger.error("Failed to send welcome to %s: %s", chat_id, e)
+        logger.error("Failed to send welcome to %s: %s", chat.id, e)
 
-    if status != "administrator":
-        logger.info(
-            "Bot is not admin in %s; skipping permission/title/description changes",
-            chat_id,
+
+async def setup_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Apply restricted permissions, description, and title to the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await update.message.reply_text("This command only works in groups.")
+        return
+
+    caller = await chat.get_member(user.id)
+    if caller.status not in ("creator", "administrator"):
+        await update.message.reply_text("Only group admins can run /setup.")
+        return
+
+    bot_member = await chat.get_member(context.bot.id)
+    if bot_member.status != "administrator":
+        await update.message.reply_text(
+            "I need to be an admin first. Promote me, then run /setup again."
         )
         return
 
+    results = []
+
     try:
         await context.bot.set_chat_permissions(
-            chat_id=chat_id, permissions=RESTRICTED_PERMISSIONS
+            chat_id=chat.id, permissions=RESTRICTED_PERMISSIONS
         )
+        results.append("permissions ✓")
     except Exception as e:
-        logger.error("Failed to set permissions for %s: %s", chat_id, e)
+        logger.error("Failed to set permissions for %s: %s", chat.id, e)
+        results.append(f"permissions ✗ ({e})")
 
     if GROUP_DESCRIPTION:
         try:
             await context.bot.set_chat_description(
-                chat_id=chat_id, description=GROUP_DESCRIPTION
+                chat_id=chat.id, description=GROUP_DESCRIPTION
             )
+            results.append("description ✓")
         except Exception as e:
-            logger.error("Failed to set description for %s: %s", chat_id, e)
+            logger.error("Failed to set description for %s: %s", chat.id, e)
+            results.append(f"description ✗ ({e})")
 
     if GROUP_TITLE:
         try:
-            await context.bot.set_chat_title(chat_id=chat_id, title=GROUP_TITLE)
+            await context.bot.set_chat_title(chat_id=chat.id, title=GROUP_TITLE)
+            results.append("title ✓")
         except Exception as e:
-            logger.error("Failed to set title for %s: %s", chat_id, e)
+            logger.error("Failed to set title for %s: %s", chat.id, e)
+            results.append(f"title ✗ ({e})")
+
+    await update.message.reply_text("Setup: " + ", ".join(results))
 
 
 async def filter_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -172,6 +189,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setlink", setlink))
+    app.add_handler(CommandHandler("setup", setup_group))
     app.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
