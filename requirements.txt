@@ -1,2 +1,4 @@
 requests>=2.31
 python-telegram-bot>=21.0
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.0

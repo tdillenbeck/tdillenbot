@@ -24,6 +24,7 @@ from telegram.ext import (
 )
 
 from rebrandly import extract_video_id, point_rebrandly
+from youtube import create_live_broadcast
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
@@ -76,6 +77,32 @@ async def setlink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error("Failed to update rebrandly link: %s", e)
         await update.message.reply_text("Failed to update link. Check the logs.")
+
+
+async def newlive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    progress = await update.message.reply_text("Creating YouTube broadcast...")
+
+    try:
+        result = create_live_broadcast()
+    except Exception as e:
+        logger.exception("Failed to create YouTube broadcast")
+        await progress.edit_text(f"Failed to create broadcast: {e}")
+        return
+
+    youtube_url = result["url"]
+    scheduled = result["scheduled_start"]
+
+    rebrandly_note = ""
+    try:
+        point_rebrandly(youtube_url)
+        rebrandly_note = "\nRebrandly link updated."
+    except Exception as e:
+        logger.exception("Failed to update rebrandly after creating broadcast")
+        rebrandly_note = f"\n⚠️ Rebrandly update failed: {e}"
+
+    await progress.edit_text(
+        f"Broadcast scheduled for {scheduled}\n{youtube_url}{rebrandly_note}"
+    )
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -393,6 +420,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setlink", setlink))
+    app.add_handler(CommandHandler("newlive", newlive))
     app.add_handler(CommandHandler("setup", setup_group))
     app.add_handler(CommandHandler("welcome", welcome))
     app.add_handler(CallbackQueryHandler(welcome_next, pattern=r"^welcome:next:"))
