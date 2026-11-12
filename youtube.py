@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Create a scheduled YouTube live broadcast."""
+"""Create a scheduled YouTube live broadcast bound to the persistent stream key."""
 
 import datetime as dt
 import os
+import re
 from zoneinfo import ZoneInfo
 
 from google.oauth2.credentials import Credentials
@@ -35,6 +36,54 @@ def next_scheduled_time() -> dt.datetime:
     return candidate
 
 
+def parse_newlive_args(text: str) -> tuple[str | None, dt.datetime | None]:
+    """Parse "<title> | <YYYY-MM-DD HH:MM>" (both parts optional) into (title, start).
+
+    A lone date/time with no title is accepted too. The time is interpreted in
+    BROADCAST_TIMEZONE. Raises ValueError if a time is given but is invalid or
+    in the past.
+    """
+    text = text.strip()
+    if not text:
+        return None, None
+
+    if "|" not in text:  # either a bare time or a bare title
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text):
+            return None, _parse_time(text)
+        return text, None
+
+    title, _, when = text.rpartition("|")
+    title, when = title.strip(), when.strip()
+    return (title or None), (_parse_time(when) if when else None)
+
+
+def _parse_time(value: str) -> dt.datetime:
+    try:
+        naive = dt.datetime.strptime(value, "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise ValueError("Time must look like YYYY-MM-DD HH:MM") from None
+    start = naive.replace(tzinfo=ZoneInfo(BROADCAST_TIMEZONE))
+    if start <= dt.datetime.now(ZoneInfo(BROADCAST_TIMEZONE)):
+        raise ValueError("Start time must be in the future")
+    return start
+
+
+def _find_stream_id(youtube) -> str:
+    """Return the persistent (reusable) stream to bind broadcasts to."""
+    configured = os.environ.get("YOUTUBE_STREAM_ID")
+    if configured:
+        return configured
+    response = (
+        youtube.liveStreams().list(part="id,contentDetails", mine=True).execute()
+    )
+    for stream in response.get("items", []):
+        if stream.get("contentDetails", {}).get("isReusable"):
+            return stream["id"]
+    raise RuntimeError(
+        "No live stream found on this channel. Create one in YouTube Studio or set YOUTUBE_STREAM_ID."
+    )
+
+
 def _credentials() -> Credentials:
     return Credentials(
         token=None,
@@ -46,18 +95,23 @@ def _credentials() -> Credentials:
     )
 
 
-def create_live_broadcast() -> dict:
-    """Create a scheduled live broadcast. Returns dict with video_id, url, scheduled_start."""
+def create_live_broadcast(
+    title: str | None = None, start: dt.datetime | None = None
+) -> dict:
+    """Create a scheduled live broadcast and bind it to the persistent stream key.
+
+    Returns dict with video_id, url, scheduled_start.
+    """
     creds = _credentials()
     youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
 
-    start = next_scheduled_time()
+    start = start or next_scheduled_time()
 
     request = youtube.liveBroadcasts().insert(
         part="snippet,status,contentDetails",
         body={
             "snippet": {
-                "title": BROADCAST_TITLE,
+                "title": title or BROADCAST_TITLE,
                 "description": BROADCAST_DESCRIPTION,
                 "scheduledStartTime": start.isoformat(),
             },
@@ -73,6 +127,10 @@ def create_live_broadcast() -> dict:
     )
     response = request.execute()
     video_id = response["id"]
+
+    youtube.liveBroadcasts().bind(
+        id=video_id, part="id,contentDetails", streamId=_find_stream_id(youtube)
+    ).execute()
     return {
         "video_id": video_id,
         "url": f"https://www.youtube.com/watch?v={video_id}",

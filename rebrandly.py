@@ -15,7 +15,10 @@ def point_rebrandly(new_id):
     rebrandly_headers = {'apikey': api_key, 'Content-Type': 'application/json'}
     rebrandly_json = {"destination": new_destination}
 
-    action = requests.post(rebrandly_url, json=rebrandly_json, headers=rebrandly_headers)
+    action = requests.post(
+        rebrandly_url, json=rebrandly_json, headers=rebrandly_headers, timeout=15
+    )
+    action.raise_for_status()
     return action.content
 
 

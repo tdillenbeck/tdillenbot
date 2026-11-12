@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import asyncio
+import functools
 import json
 import logging
 import os
@@ -24,7 +26,7 @@ from telegram.ext import (
 )
 
 from rebrandly import extract_video_id, point_rebrandly
-from youtube import create_live_broadcast
+from youtube import create_live_broadcast, parse_newlive_args
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
@@ -58,12 +60,34 @@ RESTRICTED_PERMISSIONS = ChatPermissions(
 )
 
 
+def allowed_user_ids() -> set[int]:
+    """Telegram user IDs allowed to run privileged commands (fails closed if unset)."""
+    raw = os.environ.get("ALLOWED_TELEGRAM_IDS", "")
+    return {int(x) for x in re.split(r"[,\s]+", raw) if x.strip().isdigit()}
+
+
+def authorized(handler):
+    """Restrict a command handler to users in ALLOWED_TELEGRAM_IDS."""
+
+    @functools.wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        if user is None or user.id not in allowed_user_ids():
+            logger.warning("Unauthorized %s attempt from %s", handler.__name__, user and user.id)
+            await update.message.reply_text("You're not allowed to use this command.")
+            return
+        await handler(update, context)
+
+    return wrapper
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Hello! Send /setlink <youtube-url> to update the rebrandly link."
     )
 
 
+@authorized
 async def setlink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text("Usage: /setlink <youtube-url>")
@@ -71,7 +95,7 @@ async def setlink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     url = context.args[0]
     try:
-        point_rebrandly(url)
+        await asyncio.to_thread(point_rebrandly, url)
         video_id = extract_video_id(url)
         await update.message.reply_text(f"Link updated to video: {video_id}")
     except Exception as e:
@@ -79,11 +103,19 @@ async def setlink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Failed to update link. Check the logs.")
 
 
+@authorized
 async def newlive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/newlive [title] [| YYYY-MM-DD HH:MM] — create a broadcast and repoint the link."""
+    try:
+        title, start = parse_newlive_args(" ".join(context.args or []))
+    except ValueError as e:
+        await update.message.reply_text(f"{e}\nUsage: /newlive [title] [| YYYY-MM-DD HH:MM]")
+        return
+
     progress = await update.message.reply_text("Creating YouTube broadcast...")
 
     try:
-        result = create_live_broadcast()
+        result = await asyncio.to_thread(create_live_broadcast, title, start)
     except Exception as e:
         logger.exception("Failed to create YouTube broadcast")
         await progress.edit_text(f"Failed to create broadcast: {e}")
@@ -94,7 +126,7 @@ async def newlive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     rebrandly_note = ""
     try:
-        point_rebrandly(youtube_url)
+        await asyncio.to_thread(point_rebrandly, youtube_url)
         rebrandly_note = "\nRebrandly link updated."
     except Exception as e:
         logger.exception("Failed to update rebrandly after creating broadcast")
