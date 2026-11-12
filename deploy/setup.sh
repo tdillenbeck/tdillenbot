@@ -58,11 +58,20 @@ else
     read -rp "  TELEGRAM_BOT_TOKEN: " telegram_token
     read -rp "  REBRANDLY_API_KEY:   " rebrandly_key
     read -rp "  REBRANDLY_LINK_ID:   " rebrandly_link_id
+    read -rp "  ALLOWED_TELEGRAM_IDS (comma-separated): " allowed_ids
+    echo "  YouTube values come from running oauth_setup.py locally (leave blank to skip /newlive)."
+    read -rp "  YOUTUBE_CLIENT_ID:     " yt_client_id
+    read -rp "  YOUTUBE_CLIENT_SECRET: " yt_client_secret
+    read -rp "  YOUTUBE_REFRESH_TOKEN: " yt_refresh_token
 
     cat > "$APP_DIR/.env" <<EOF
 TELEGRAM_BOT_TOKEN=${telegram_token}
 REBRANDLY_API_KEY=${rebrandly_key}
 REBRANDLY_LINK_ID=${rebrandly_link_id}
+ALLOWED_TELEGRAM_IDS=${allowed_ids}
+YOUTUBE_CLIENT_ID=${yt_client_id}
+YOUTUBE_CLIENT_SECRET=${yt_client_secret}
+YOUTUBE_REFRESH_TOKEN=${yt_refresh_token}
 EOF
     chmod 600 "$APP_DIR/.env"
     chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/.env"
